@@ -1,0 +1,6 @@
+__pycache__
+config/__pycache__
+services/__pycache__
+db/__pycache__
+utils/__pycache__
+*.env

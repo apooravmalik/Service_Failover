@@ -1,0 +1,10 @@
+# Configuration management
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# Database connectivity
+SQLAlchemy>=2.0.0
+pyodbc>=4.0.34
+
+# System utilities  
+psutil>=5.9.0
