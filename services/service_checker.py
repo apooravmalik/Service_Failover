@@ -6,7 +6,7 @@ import logging
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 from datetime import datetime
-
+from sqlalchemy import text
 from config.config_loader import Config, ServiceConfig, LogCheck, get_config
 from db.database import get_db, engine
 from utils.utils import LogFileReader, read_log_file_lines
@@ -137,7 +137,7 @@ class ServiceChecker:
         try:
             logger.info(f"Starting service {service_name}...")
             result = subprocess.run(
-                ['net', 'start', service_name],
+                ['sc', 'start', service_name],
                 capture_output=True,
                 text=True,
                 timeout=self.config.settings.service_restart_timeout
@@ -162,7 +162,7 @@ class ServiceChecker:
         try:
             logger.info(f"Stopping service {service_name}...")
             result = subprocess.run(
-                ['net', 'stop', service_name],
+                ['sc', 'stop', service_name],
                 capture_output=True,
                 text=True,
                 timeout=self.config.settings.service_restart_timeout
@@ -218,22 +218,15 @@ class ServiceChecker:
             lines = read_log_file_lines(
                 service_config.log_path,
                 encoding=self.config.settings.log_encoding,
-                max_lines=max_lines
+                max_lines=max_lines,
+                is_sil=service_config.sil_file
             )
-            
+
             if not lines:
                 return CheckResult.ERROR, "Log file is empty or unreadable"
             
-            # Log format detection info
-            try:
-                from utils.utils import LogFileReader
-                log_format = LogFileReader.detect_log_format(service_config.log_path)
-                logger.debug(f"Detected log format for {service_config.name}: {log_format.value}")
-            except:
-                pass
-            
             return self._process_log_checks(lines, service_config.checks)
-            
+
         except Exception as e:
             return CheckResult.ERROR, f"Error reading log file: {e}"
     
@@ -312,11 +305,11 @@ class ServiceChecker:
                     )
                     
                     # Execute update query
-                    query = f"""
+                    query = text(f"""
                     UPDATE {self.config.database.schema}.{update.table}
                     SET {update.set_column} = :value
                     WHERE {update.where_condition}
-                    """
+                    """)
                     
                     result = db.execute(query, {'value': formatted_value})
                     affected_rows = result.rowcount

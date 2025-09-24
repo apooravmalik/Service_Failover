@@ -17,11 +17,25 @@ config_loader = ConfigLoader(config_path)
 config_loader.load_config()  # Load config.yaml at startup
 
 # ---------------------- LOG FILE READING ----------------------
-def read_log_file_lines(file_path: str, encoding: str = 'utf-8') -> list[str]:
+def read_log_file_lines(file_path: str, encoding: str = 'utf-8', max_lines: int = None, is_sil: bool = False) -> list[str]:
     if not os.path.exists(file_path):
         return []
-    with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
-        return [line.rstrip('\r\n') for line in f.readlines()]
+
+    if is_sil:
+        
+        # For SIL files, read in binary and extract strings like sil_debug.py does
+        with open(file_path, "rb") as f:
+            data = f.read()
+        strings = re.findall(rb"[ -~]{4,}", data)
+        lines = [s.decode(encoding, errors="ignore") for s in strings]
+    else:
+        # For regular text files, read line by line
+        with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
+            lines = [line.rstrip('\r\n') for line in f.readlines()]
+
+    if max_lines:
+        return lines[-max_lines:]
+    return lines
 
 # ---------------------- PTZ SIL / LOG SCAN ----------------------
 def find_last_ptz_markers(file_path: str, markers=None):
