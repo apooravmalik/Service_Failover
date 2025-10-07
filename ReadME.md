@@ -95,9 +95,9 @@ cluster:
   default_primary_node: "VERACITY-APPV1"
   nodes:
     - name: "VERACITY-APPV1"
-      ip: "172.16.10.56"
+      ip: "***.**.**.56"
     - name: "VERACITY-APPV2"
-      ip: "172.16.10.57"
+      ip: "***.**.**.57"
 
 # ViewScape Master Service
 viewscape:
@@ -143,13 +143,13 @@ logging:
 
 ### Node Roles
 
-#### VERACITY-APPV1 (Primary - 172.16.10.56)
+#### VERACITY-APPV1 (Primary - ***.**.**.56)
 - **Primary ViewScape Master**: `ViewscapeMasterControl` service runs here
 - **PTZ Services**: `Veracity_PTZ` service runs here
 - **Database Access**: Primary database connection
 - **Ports Open**: 500, 12345 (ViewScape communication)
 
-#### VERACITY-APPV2 (Fallback - 172.16.10.57)
+#### VERACITY-APPV2 (Fallback - ***.**.**.57)
 - **Standby ViewScape**: Can run `ViewscapeMasterControl` if primary fails
 - **Backup Services**: Can host `Veracity_PTZ` if needed
 - **Database Access**: Same database, different connection
@@ -348,7 +348,7 @@ nssm start "VeracityServiceController"
 ```
 2024-01-15 10:30:00,123 - ServiceController - INFO - VERACITY SERVICE CONTROLLER STARTING
 2024-01-15 10:30:00,234 - ServiceController - INFO - Cluster: VERACITY-CLUSTER
-2024-01-15 10:30:00,345 - ServiceController - INFO - Connected to active node: 172.16.10.56
+2024-01-15 10:30:00,345 - ServiceController - INFO - Connected to active node: ***.**.**.56
 2024-01-15 10:30:30,456 - ServiceController - INFO - Checking service: Veracity_PTZ
 2024-01-15 10:30:30,567 - ServiceController - INFO - Log check result for Veracity_PTZ: passed - All log checks passed
 2024-01-15 10:30:30,678 - ServiceController - INFO - Service check completed: 1/1 successful
