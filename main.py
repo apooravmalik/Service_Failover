@@ -9,6 +9,7 @@ import threading
 from logging.handlers import RotatingFileHandler
 
 from config.config_loader import load_config, Config
+from services.communication import MessageHandler
 from services.service_checker import ServiceChecker
 from db.database import test_connection
 from dotenv import load_dotenv
@@ -23,10 +24,14 @@ class ServiceController:
         self.is_running = False
         self.monitor_thread: Optional[threading.Thread] = None
         self.logger: Optional[logging.Logger] = None
+        self.message_handler: Optional[MessageHandler] = None
+        self.other_node_status = {}
+        self.last_heartbeat_received = None
         
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully"""
@@ -96,6 +101,14 @@ class ServiceController:
             # Initialize service checker
             self.service_checker = ServiceChecker(self.config)
             
+            # Initialize MessageHandler
+            my_node = self.service_checker.get_my_node()
+            if not my_node:
+                self.logger.error("Could not determine the current node from config.")
+                return False
+            
+            self.message_handler = MessageHandler(my_node.ip, self.config.settings.communication_port, self.handle_incoming_message)
+            
             self.logger.info("Service Controller initialized successfully")
             return True
             
@@ -105,6 +118,11 @@ class ServiceController:
             else:
                 print(f"Failed to initialize Service Controller: {e}")
             return False
+    
+    def handle_incoming_message(self, message):
+        """Callback function to handle messages from the other node."""
+        self.last_heartbeat_received = datetime.now()
+        self.other_node_status = message
     
     def _discover_cluster(self) -> bool:
         """Discover and connect to the active cluster node"""
@@ -126,29 +144,21 @@ class ServiceController:
             try:
                 start_time = time.time()
                 
-                # Check cluster health first
-                if not self.service_checker.is_cluster_healthy():
-                    self.logger.error("Cluster is unhealthy, attempting to reconnect...")
-                    if not self._discover_cluster():
-                        self.logger.error("Failed to reconnect to cluster, waiting before retry...")
-                        time.sleep(self.config.settings.check_interval)
-                        continue
+                # 1. Get the status of this machine's services
+                my_status = self.get_my_status()
                 
-                # Check all services
-                self.logger.info("Starting service checks...")
-                results = self.service_checker.check_all_services()
+                # 2. Send this machine's status to the other node
+                other_node = self.service_checker.get_other_node()
                 
-                # Log summary
-                total_services = len(results)
-                successful_services = sum(1 for success in results.values() if success)
-                failed_services = total_services - successful_services
+                self.logger.debug(f"My status: {my_status}")
+                self.logger.debug(f"Other node: {other_node}")
                 
-                self.logger.info(f"Service check completed: {successful_services}/{total_services} successful")
-                
-                if failed_services > 0:
-                    failed_list = [name for name, success in results.items() if not success]
-                    self.logger.warning(f"Failed services: {', '.join(failed_list)}")
-                
+                if other_node:
+                    MessageHandler.send_message(other_node.ip, self.config.settings.communication_port, my_status)
+
+                # 3. Make decisions based on the heartbeat from the other node
+                self.make_failover_decision(my_status)
+
                 # Calculate sleep time to maintain check interval
                 elapsed_time = time.time() - start_time
                 sleep_time = max(0, self.config.settings.check_interval - elapsed_time)
@@ -164,7 +174,78 @@ class ServiceController:
                 time.sleep(self.config.settings.check_interval)
         
         self.logger.info("Service monitoring loop stopped")
+        
+    def get_my_status(self) -> dict:
+        """Get the current status of this machine."""
+        is_master_running = self.service_checker.check_viewscape_service_local()
+        
+        service_statuses = {}
+        for service_config in self.config.services:
+            status = self.service_checker.get_service_status(service_config.name)
+            service_statuses[service_config.name] = status.value
+
+        return {
+            "node": self.service_checker.get_my_node().name,
+            "timestamp": datetime.now().isoformat(),
+            "is_master_running": is_master_running,
+            "services": service_statuses
+        }
+        
+    def make_failover_decision(self, my_status):
+        """The core logic for deciding who should be the active node."""
+        my_node = self.service_checker.get_my_node()
+        other_node = self.service_checker.get_other_node()
+        is_primary_node = my_node.name == self.config.cluster.default_primary_node
+
+        # Check if the other node is alive
+        other_node_alive = False
+        if self.last_heartbeat_received:
+            time_since_last_beat = (datetime.now() - self.last_heartbeat_received).total_seconds()
+            if time_since_last_beat < (self.config.settings.check_interval * 2):
+                other_node_alive = True
+
+        # Decision logic
+        if is_primary_node:
+            if not my_status["is_master_running"]:
+                # Primary node's master service is down.
+                if not other_node_alive or not self.other_node_status.get("is_master_running"):
+                    # The other node is either down or its master is also down.
+                    # The primary node should try to start its own master service.
+                    self.logger.warning("Master service is down. Trying to start it on primary node.")
+                    self.service_checker.start_service(self.config.viewscape.service_name)
+                    # Also handle other services
+                    self.handle_services_on_active_node()
+                else:
+                    # The fallback is running the master service. Do nothing.
+                    self.logger.info("Master service is running on fallback node. Primary is passive.")
+            else:
+                # Primary node's master service is running. This is the active node.
+                self.logger.info("Primary node is the active node.")
+                self.handle_services_on_active_node()
+
+        else: # This is the fallback node
+            if not other_node_alive:
+                # The primary node is down. The fallback should take over.
+                if not my_status["is_master_running"]:
+                    self.logger.warning("Primary node is down. Starting master service on fallback.")
+                    self.service_checker.start_service(self.config.viewscape.service_name)
+                
+                self.logger.info("Fallback node is the active node.")
+                self.handle_services_on_active_node()
+            else:
+                # Primary node is alive. Fallback should be passive.
+                self.logger.info("Primary node is active. Fallback is passive.")
+                # Ensure all services on fallback are stopped
+                for service_config in self.config.services:
+                    self.service_checker.stop_service(service_config.name)
+                self.service_checker.stop_service(self.config.viewscape.service_name)
     
+       
+    def handle_services_on_active_node(self):
+        """Check and manage the monitored services on the active node."""
+        for service_config in self.config.services:
+            self.service_checker.handle_service(service_config)
+            
     def start(self) -> bool:
         """Start the service controller"""
         if not self.initialize():
@@ -179,11 +260,10 @@ class ServiceController:
             self.logger.info(f"Machine: {self.service_checker.machine_name}")
             self.logger.info(f"Services to monitor: {len(self.config.services)}")
             self.logger.info(f"Check interval: {self.config.settings.check_interval}s")
-            
-            # Discover cluster
-            if not self._discover_cluster():
-                self.logger.error("Failed to discover cluster, cannot start")
-                return False
+        
+            # Start the message server
+            self.server_thread = threading.Thread(target=self.message_handler.start_server, daemon=True)
+            self.server_thread.start()
             
             # Start monitoring in separate thread
             self.is_running = True
@@ -213,6 +293,10 @@ class ServiceController:
         """Stop the service controller"""
         if not self.is_running:
             return
+        
+        # Stop the message server
+        if self.message_handler:
+            self.message_handler.stop_server()
         
         self.logger.info("Stopping Service Controller...")
         self.is_running = False
