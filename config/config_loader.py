@@ -15,7 +15,7 @@ class NodeConfig:
 class ClusterConfig:
     name: str
     role_name: str
-    default_primary_node: str
+    # default_primary_node: str  <-- REMOVED
     nodes: List[NodeConfig]
 
 @dataclass
@@ -52,6 +52,7 @@ class SettingsConfig:
     service_restart_timeout: int
     log_encoding: str
     max_log_lines_to_check: int
+    communication_port: Optional[int] = 12345 # Keep for now
 
 @dataclass
 class LoggingConfig:
@@ -102,7 +103,6 @@ class ConfigLoader:
     def _parse_config(self, config_data: Dict[str, Any]) -> Config:
         """Parse configuration data into structured objects"""
         
-        # Parse cluster configuration
         cluster_data = config_data['cluster']
         nodes = [
             NodeConfig(name=node['name'], ip=node['ip'])
@@ -111,11 +111,10 @@ class ConfigLoader:
         cluster = ClusterConfig(
             name=cluster_data['name'],
             role_name=cluster_data['role_name'],
-            default_primary_node=cluster_data['default_primary_node'],
+            # default_primary_node=cluster_data['default_primary_node'], <-- REMOVED
             nodes=nodes
         )
         
-        # Parse ViewScape configuration
         viewscape_data = config_data['viewscape']
         viewscape = ViewScapeConfig(
             service_name=viewscape_data['service_name'],
@@ -123,7 +122,6 @@ class ConfigLoader:
             connection_timeout=viewscape_data['connection_timeout']
         )
         
-        # Parse services configuration
         services = []
         for service_data in config_data['services']:
             checks = [
@@ -155,7 +153,6 @@ class ConfigLoader:
             )
             services.append(service)
         
-        # Parse other configurations
         settings = SettingsConfig(**config_data['settings'])
         logging_config = LoggingConfig(**config_data['logging'])
         database = DatabaseConfig(**config_data['database'])
@@ -211,24 +208,20 @@ class ConfigLoader:
             return False
         
         try:
-            # Validate cluster configuration
             if not self._config.cluster.nodes:
                 logger.error("No nodes defined in cluster configuration")
                 return False
             
-            # Validate default primary node exists
-            primary_node = self.get_node_by_name(self._config.cluster.default_primary_node)
-            if not primary_node:
-                logger.error(f"Default primary node '{self._config.cluster.default_primary_node}' not found in nodes list")
-                return False
+            # primary_node = self.get_node_by_name(self._config.cluster.default_primary_node) <-- REMOVED
+            # if not primary_node:
+            #     logger.error(f"Default primary node '{self._config.cluster.default_primary_node}' not found in nodes list")
+            #     return False
             
-            # Validate services
             for service in self._config.services:
                 if service.log_enabled and not service.log_path:
                     logger.error(f"Service '{service.name}' has log_enabled=true but no log_path specified")
                     return False
                 
-                # Validate log check actions
                 for check in service.checks:
                     if check.action not in ['find_last', 'find_after_previous', 'find_first']:
                         logger.error(f"Invalid log check action '{check.action}' in service '{service.name}'")
@@ -251,11 +244,10 @@ class ConfigLoader:
         default_config = {
             'cluster': {
                 'name': 'VERACITY-CLUSTER',
-                'role_name': 'ViewScape-Master',
-                'default_primary_node': 'VERACITY-APPV1',
+                'role_name': 'VMC', # Changed to VMC as per your setup
                 'nodes': [
-                    {'name': 'VERACITY-APPV1', 'ip': '172.16.10.56'},
-                    {'name': 'VERACITY-APPV2', 'ip': '172.16.10.57'}
+                    {'name': 'TVPS', 'ip': '10.***.*.173'}, # Example
+                    {'name': 'TVPS2', 'ip': '10.***.*.205'} # Example
                 ]
             },
             'viewscape': {
@@ -287,7 +279,8 @@ class ConfigLoader:
                 'check_interval': 30,
                 'service_restart_timeout': 60,
                 'log_encoding': 'utf-8',
-                'max_log_lines_to_check': 1000
+                'max_log_lines_to_check': 1000,
+                'communication_port': 12345
             },
             'logging': {
                 'level': 'INFO',
