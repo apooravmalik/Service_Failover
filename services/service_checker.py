@@ -72,7 +72,8 @@ class ServiceChecker:
         Returns the node name or None if the command fails.
         """
         try:
-            command = "powershell.exe -Command \"((Get-ClusterGroup 'Cluster Group').OwnerNode).Name\""
+            role_name = self.config.cluster.role_name
+            command = f"powershell.exe -Command \"((Get-ClusterGroup '{role_name}').OwnerNode).Name\""
             result = subprocess.run(
                 command,
                 capture_output=True,
