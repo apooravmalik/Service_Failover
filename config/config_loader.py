@@ -15,7 +15,6 @@ class NodeConfig:
 class ClusterConfig:
     name: str
     role_name: str
-    # default_primary_node: str  <-- REMOVED
     nodes: List[NodeConfig]
 
 @dataclass
@@ -41,10 +40,11 @@ class DatabaseUpdate:
 class ServiceConfig:
     name: str
     log_enabled: bool
-    log_path: str
     sil_file: bool
     checks: List[LogCheck]
     database_updates: List[DatabaseUpdate]
+    log_directory: Optional[str] = None
+    log_file_pattern: Optional[str] = None
 
 @dataclass
 class SettingsConfig:
@@ -52,7 +52,7 @@ class SettingsConfig:
     service_restart_timeout: int
     log_encoding: str
     max_log_lines_to_check: int
-    communication_port: Optional[int] = 12345 # Keep for now
+    communication_port: Optional[int] = 12345
 
 @dataclass
 class LoggingConfig:
@@ -111,7 +111,6 @@ class ConfigLoader:
         cluster = ClusterConfig(
             name=cluster_data['name'],
             role_name=cluster_data['role_name'],
-            # default_primary_node=cluster_data['default_primary_node'], <-- REMOVED
             nodes=nodes
         )
         
@@ -146,7 +145,8 @@ class ConfigLoader:
             service = ServiceConfig(
                 name=service_data['name'],
                 log_enabled=service_data['log_enabled'],
-                log_path=service_data['log_path'],
+                log_directory=service_data.get('log_directory'),
+                log_file_pattern=service_data.get('log_file_pattern'),
                 sil_file=service_data['sil_file'],
                 checks=checks,
                 database_updates=db_updates
@@ -212,14 +212,9 @@ class ConfigLoader:
                 logger.error("No nodes defined in cluster configuration")
                 return False
             
-            # primary_node = self.get_node_by_name(self._config.cluster.default_primary_node) <-- REMOVED
-            # if not primary_node:
-            #     logger.error(f"Default primary node '{self._config.cluster.default_primary_node}' not found in nodes list")
-            #     return False
-            
             for service in self._config.services:
-                if service.log_enabled and not service.log_path:
-                    logger.error(f"Service '{service.name}' has log_enabled=true but no log_path specified")
+                if service.log_enabled and not service.log_directory:
+                    logger.error(f"Service '{service.name}' has log_enabled=true but no log_directory specified")
                     return False
                 
                 for check in service.checks:
@@ -244,10 +239,10 @@ class ConfigLoader:
         default_config = {
             'cluster': {
                 'name': 'VERACITY-CLUSTER',
-                'role_name': 'VMC', # Changed to VMC as per your setup
+                'role_name': 'VMC',
                 'nodes': [
-                    {'name': 'TVPS', 'ip': '10.***.*.173'}, # Example
-                    {'name': 'TVPS2', 'ip': '10.***.*.205'} # Example
+                    {'name': 'TVPS', 'ip': '10.***.*.173'},
+                    {'name': 'TVPS2', 'ip': '10.***.*.205'}
                 ]
             },
             'viewscape': {
@@ -259,8 +254,9 @@ class ConfigLoader:
                 {
                     'name': 'Veracity_PTZ',
                     'log_enabled': True,
-                    'log_path': 'C:\\Logs\\PTZ\\ptz_service.log',
-                    'sil_file': False,
+                    'log_directory': 'C:\\Logs\\PTZ\\',
+                    'log_file_pattern': 'proserver-(\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}-\\d{2})\\.sil',
+                    'sil_file': True,
                     'checks': [
                         {'find_string': 'Log started', 'action': 'find_last'},
                         {'find_string': 'CreatedNewPTZInstance', 'action': 'find_after_previous', 'search_lines': 25}

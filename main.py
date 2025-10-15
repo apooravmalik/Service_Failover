@@ -10,7 +10,7 @@ from logging.handlers import RotatingFileHandler
 
 from config.config_loader import load_config, Config
 from services.communication import MessageHandler
-from services.service_checker import ServiceChecker
+from services.service_checker import ServiceChecker, CheckResult
 from db.database import test_connection
 from dotenv import load_dotenv
 
@@ -27,6 +27,8 @@ class ServiceController:
         self.message_handler: Optional[MessageHandler] = None
         self.other_node_status = {}
         self.last_heartbeat_received = None
+        self.last_known_owner: Optional[str] = None
+        self.ptz_consecutive_failures = 0
         
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -87,10 +89,6 @@ class ServiceController:
                 self.logger.error("Could not determine the current node from config.")
                 return False
             
-            # --- Heartbeat communication is no longer needed for failover ---
-            # communication_port = getattr(self.config.settings, 'communication_port', 12345)
-            # self.message_handler = MessageHandler(my_node.ip, communication_port, self.handle_incoming_message)
-            
             self.logger.info("Service Controller initialized successfully")
             return True
             
@@ -100,7 +98,6 @@ class ServiceController:
     
     def handle_incoming_message(self, message):
         """Callback function to handle messages from the other node."""
-        # This function is no longer critical but left for potential future use
         self.last_heartbeat_received = datetime.now()
         self.other_node_status = message
     
@@ -108,6 +105,8 @@ class ServiceController:
         """Main monitoring loop running in a separate thread"""
         self.logger.info("Starting service monitoring loop...")
         
+        self.service_checker.check_initial_db_ip()
+
         while self.is_running:
             try:
                 self.logger.debug("--- Monitor loop started ---")
@@ -140,7 +139,6 @@ class ServiceController:
         my_node_name = self.service_checker.get_my_node().name
         is_cluster_owner = (cluster_owner is not None and os.path.normcase(cluster_owner) == os.path.normcase(my_node_name))
 
-        # This status is now for information/logging only, not for failover
         is_master_running = self.service_checker.check_viewscape_service_local()
         service_statuses = {
             s.name: self.service_checker.get_service_status(s.name).value
@@ -159,6 +157,7 @@ class ServiceController:
     def make_failover_decision(self):
         """
         Failover logic that relies ONLY on the Windows Cluster Owner.
+        Triggers database updates only on owner change.
         """
         my_node = self.service_checker.get_my_node()
         
@@ -166,7 +165,13 @@ class ServiceController:
         definitive_owner = self.service_checker.get_cluster_owner_node()
         self.logger.debug(f"Finished getting cluster owner node. Owner: {definitive_owner}")
 
-        # --- Primary Logic: Prioritize Windows Cluster ---
+        if definitive_owner and definitive_owner != self.last_known_owner:
+            self.logger.info(f"Cluster owner has changed from '{self.last_known_owner}' to '{definitive_owner}'.")
+            if os.path.normcase(my_node.name) == os.path.normcase(definitive_owner):
+                self.logger.info("This node is the new owner. Updating database settings.")
+                self.service_checker.update_database_for_all_services()
+            self.last_known_owner = definitive_owner
+
         if definitive_owner:
             self.logger.debug(f"Making decision based on Windows Cluster. Owner is '{definitive_owner}'.")
             if os.path.normcase(my_node.name) == os.path.normcase(definitive_owner):
@@ -177,17 +182,48 @@ class ServiceController:
                 self.service_checker.stop_all_services()
             return
 
-        # --- No Fallback Logic ---
         self.logger.error("Could not determine Windows Cluster owner. Taking no action to prevent split-brain. Will retry.")
     
     def handle_services_on_active_node(self):
-        """Ensure all services are running on the node that is currently active."""
-        self.logger.info("Node is in active state. Checking and starting services as needed.")
+        """
+        Handle the new service check logic: PTZ first, then escalate to Viewscape if PTZ fails repeatedly.
+        """
+        self.logger.info("Node is in active state. Checking services with new tiered logic.")
+
+        # 1. Ensure ViewscapeMasterControl is running, but don't restart it yet based on PTZ.
         if not self.service_checker.check_viewscape_service_local():
+            self.logger.warning(f"{self.config.viewscape.service_name} is stopped. Starting it now.")
             self.service_checker.start_service(self.config.viewscape.service_name)
         
+        # 2. Find and prioritize the Veracity_PTZ service check.
+        ptz_service_config = next((s for s in self.config.services if s.name == "Veracity_PTZ"), None)
+        
+        if not ptz_service_config:
+            self.logger.error("Configuration error: 'Veracity_PTZ' not found in services list.")
+            return
+
+        ptz_check_result = self.service_checker.handle_service(ptz_service_config)
+
+        # 3. Implement the new tiered restart logic.
+        if ptz_check_result == CheckResult.FAILED:
+            self.ptz_consecutive_failures += 1
+            self.logger.warning(f"PTZ service check failed. Consecutive failures: {self.ptz_consecutive_failures}")
+
+            # If it fails more than once, restart the master controller.
+            if self.ptz_consecutive_failures > 1:
+                self.logger.error(f"PTZ service has failed repeatedly. Escalating: Restarting {self.config.viewscape.service_name}.")
+                self.service_checker.restart_service(self.config.viewscape.service_name)
+                self.ptz_consecutive_failures = 0  # Reset counter after escalation
+        
+        elif ptz_check_result == CheckResult.PASSED:
+            if self.ptz_consecutive_failures > 0:
+                self.logger.info("PTZ service check has passed. Resetting consecutive failure counter.")
+            self.ptz_consecutive_failures = 0  # Reset counter on success
+
+        # 4. Handle any other configured services normally.
         for service_config in self.config.services:
-            self.service_checker.handle_service(service_config)
+            if service_config.name != "Veracity_PTZ":
+                self.service_checker.handle_service(service_config)
             
     def start(self) -> bool:
         """Start the service controller"""
@@ -196,10 +232,6 @@ class ServiceController:
         self.logger.info("=" * 60)
         self.logger.info(f"VERACITY SERVICE CONTROLLER STARTING on {self.service_checker.machine_name}")
         self.logger.info(f"Services to monitor: {[s.name for s in self.config.services]}")
-        
-        # --- Heartbeat server is no longer needed ---
-        # self.server_thread = threading.Thread(target=self.message_handler.start_server, daemon=True)
-        # self.server_thread.start()
         
         self.is_running = True
         self.monitor_thread = threading.Thread(target=self._monitor_services, daemon=True)
@@ -216,7 +248,6 @@ class ServiceController:
         """Stop the service controller"""
         if not self.is_running: return
         self.is_running = False
-        # if self.message_handler: self.message_handler.stop_server()
         if self.monitor_thread and self.monitor_thread.is_alive():
             self.monitor_thread.join(timeout=5)
         self.logger.info("Service Controller stopped.")

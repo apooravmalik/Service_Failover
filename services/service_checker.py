@@ -33,7 +33,8 @@ class ServiceChecker:
         self.current_active_node = None
         self.machine_name = self._get_machine_name()
         self.machine_ip = self._get_machine_ip()
-        
+        self.ptz_consecutive_failures = 0 # Tracks repeated failures for the new logic
+
     def _get_machine_name(self) -> str:
         """Get the current machine name"""
         import platform
@@ -74,24 +75,32 @@ class ServiceChecker:
         try:
             role_name = self.config.cluster.role_name
             command = f"powershell.exe -Command \"((Get-ClusterGroup '{role_name}').OwnerNode).Name\""
+            logger.debug(f"Executing PowerShell command: {command}")
+            
             result = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=15, # Increased timeout
                 check=False,
                 shell=True
             )
             
-            if result.returncode == 0 and result.stdout:
+            stdout_clean = result.stdout.strip() if result.stdout else "[No stdout]"
+            stderr_clean = result.stderr.strip() if result.stderr else "[No stderr]"
+
+            logger.debug(f"PowerShell command finished. Return Code: {result.returncode}, STDOUT: '{stdout_clean}', STDERR: '{stderr_clean}'")
+            
+            if result.returncode == 0 and result.stdout and result.stdout.strip():
                 owner_node = result.stdout.strip()
-                logger.debug(f"Windows Cluster owner node is: {owner_node}")
+                logger.info(f"Successfully determined Windows Cluster owner: {owner_node}")
                 return owner_node
             else:
-                logger.warning(f"Could not determine Windows Cluster owner. PS Error: {result.stderr or 'No output'}")
+                logger.warning(f"Could not determine Windows Cluster owner. PS Error: {stderr_clean}")
                 return None
-        except FileNotFoundError:
-            logger.warning("PowerShell is not available or `Get-ClusterGroup` command failed. Is the Failover Cluster module installed?")
+
+        except subprocess.TimeoutExpired:
+            logger.error("PowerShell command to get cluster owner timed out. This could indicate a cluster issue.")
             return None
         except Exception as e:
             logger.error(f"An unexpected error occurred while checking cluster owner: {e}")
@@ -156,12 +165,10 @@ class ServiceChecker:
 
     def stop_service(self, service_name: str) -> bool:
         """Stops a service only if it is currently running."""
-        # --- MODIFICATION START ---
         current_status = self.get_service_status(service_name)
         if current_status == ServiceStatus.STOPPED:
             logger.debug(f"Service {service_name} is already stopped. No action needed.")
             return True
-        # --- MODIFICATION END ---
             
         try:
             logger.info(f"Stopping service {service_name}...")
@@ -192,30 +199,43 @@ class ServiceChecker:
         for service_config in self.config.services:
             self.stop_service(service_config.name)
         self.stop_service(self.config.viewscape.service_name)
-    
+        
     def restart_service(self, service_name: str) -> bool:
-        logger.info(f"Restarting service {service_name}")
-        
-        status = self.get_service_status(service_name)
-        if status in [ServiceStatus.RUNNING, ServiceStatus.STARTING]:
-            if not self.stop_service(service_name):
-                return False
-            
-            max_wait = 30
-            for _ in range(max_wait):
-                if self.get_service_status(service_name) == ServiceStatus.STOPPED:
-                    break
-                time.sleep(1)
-            else:
-                logger.warning(f"Service {service_name} did not stop within {max_wait} seconds")
-        
-        return self.start_service(service_name)
+            """
+            TESTING VERSION: Forcefully restarts a Windows service by directly killing the process.
+            """
+            logger.warning(f"TESTING: Attempting to FORCE-RESTART service: {service_name}")
+
+            # 1. Find the PID and kill the process directly
+            try:
+                pid_query = subprocess.run(
+                    ['sc', 'queryex', service_name],
+                    capture_output=True, text=True, check=True
+                )
+                pid_match = re.search(r"PID\s+:\s+(\d+)", pid_query.stdout)
+                if pid_match:
+                    pid = pid_match.group(1)
+                    if int(pid) > 0:
+                        logger.info(f"Found service PID: {pid}. Forcefully terminating...")
+                        kill_result = subprocess.run(
+                            ['taskkill', '/F', '/PID', pid],
+                            capture_output=True, text=True
+                        )
+                        logger.info(f"Taskkill output: {kill_result.stdout.strip() or kill_result.stderr.strip()}")
+                        time.sleep(3) # Give OS a moment to clean up after the kill
+                    else:
+                        logger.info("Service reported PID of 0, it is not running. Proceeding to start.")
+                else:
+                    logger.warning("Could not find PID for the service. It might already be stopped. Proceeding to start.")
+            except Exception as e:
+                logger.error(f"Failed to find or kill process for {service_name}: {e}")
+
+            # 2. Start the service
+            return self.start_service(service_name)
     
-    def handle_service(self, service_config: ServiceConfig) -> bool:
+    def handle_service(self, service_config: ServiceConfig) -> CheckResult:
         """
-        Handle a single service check with two-step logic:
-        1. Check if the service is running.
-        2. If running, perform a deep log check.
+        Handle a single service check, now returning a CheckResult enum.
         """
         logger.info(f"Checking service: {service_config.name}")
         
@@ -223,14 +243,15 @@ class ServiceChecker:
         
         if status == ServiceStatus.STOPPED:
             logger.warning(f"Service {service_config.name} is stopped. Attempting to restart...")
-            restarted = self.restart_service(service_config.name)
-            if restarted:
-                self.update_database_settings(service_config)
-            return restarted
+            # --- MODIFICATION FOR TESTING ---
+            # self.restart_service(service_config.name)
+            logger.info(f"TESTING: Pretending to restart {service_config.name} but skipping it.")
+            # Still return FAILED to trigger the escalation logic in main.py
+            return CheckResult.FAILED
             
         elif status == ServiceStatus.UNKNOWN:
             logger.error(f"Service {service_config.name} not found or inaccessible")
-            return False
+            return CheckResult.ERROR
 
         elif status == ServiceStatus.RUNNING:
             logger.info(f"Service {service_config.name} is running. Proceeding to log check...")
@@ -241,35 +262,76 @@ class ServiceChecker:
                 
                 if check_result == CheckResult.FAILED:
                     logger.warning(f"Log check failed for running service {service_config.name}, restarting...")
-                    restarted = self.restart_service(service_config.name)
-                    if restarted:
-                        self.update_database_settings(service_config)
-                    return restarted
+                    self.restart_service(service_config.name)
+                    return CheckResult.FAILED # Return failure to trigger new logic
                 elif check_result == CheckResult.ERROR:
                     logger.error(f"Log check error for {service_config.name}: {message}")
-                    return False
+                    return CheckResult.ERROR
             
             logger.info(f"Service {service_config.name} is healthy.")
-            return True
+            return CheckResult.PASSED
             
         else:
             logger.info(f"Service {service_config.name} is in a transient state ({status.value}). No action taken.")
-            return True
+            return CheckResult.PASSED
+        
+    def _find_latest_log_file(self, directory: str, pattern: str) -> Optional[str]:
+        """
+        Finds the latest log file in a directory based on a regex pattern
+        that captures a timestamp.
+        """
+        if not os.path.isdir(directory):
+            logger.error(f"Log directory not found: {directory}")
+            return None
+
+        latest_file = None
+        latest_timestamp = None
+        
+        try:
+            log_pattern = re.compile(pattern)
+            for filename in os.listdir(directory):
+                match = log_pattern.match(filename)
+                if match:
+                    # Assumes the first captured group is the timestamp
+                    timestamp_str = match.group(1)
+                    try:
+                        file_timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d-%H-%M-%S")
+                        if latest_timestamp is None or file_timestamp > latest_timestamp:
+                            latest_timestamp = file_timestamp
+                            latest_file = os.path.join(directory, filename)
+                    except ValueError:
+                        logger.warning(f"Could not parse timestamp from filename: {filename}")
+            
+            if latest_file:
+                logger.debug(f"Found latest log file: {latest_file}")
+            else:
+                logger.warning(f"No log files matching pattern '{pattern}' found in '{directory}'.")
+
+            return latest_file
+        except Exception as e:
+            logger.error(f"Error while searching for log files in '{directory}': {e}")
+            return None
+
 
     def check_log_file(self, service_config: ServiceConfig) -> Tuple[CheckResult, str]:
         """
-        Performs a specific health check for SIL files.
-        Verifies that 'CreateNewPTZIntance' appears after the last 'Log started'.
+        Performs a health check by finding the latest log file and analyzing it.
         """
         if not service_config.log_enabled or not service_config.checks:
             return CheckResult.PASSED, "No log checks configured"
 
-        if not os.path.exists(service_config.log_path):
-            return CheckResult.ERROR, f"Log file not found: {service_config.log_path}"
+        # Dynamically find the latest log file
+        log_path = self._find_latest_log_file(service_config.log_directory, service_config.log_file_pattern)
+
+        if not log_path:
+            return CheckResult.ERROR, f"No matching log files found in {service_config.log_directory}"
+            
+        if not os.path.exists(log_path):
+            return CheckResult.ERROR, f"Latest log file not found: {log_path}"
 
         try:
-            logger.debug(f"Performing specialized health check on {service_config.log_path}")
-            with open(service_config.log_path, "rb") as f:
+            logger.debug(f"Performing health check on latest log: {log_path}")
+            with open(log_path, "rb") as f:
                 data = f.read()
 
             strings = re.findall(rb"[ -~]{4,}", data)
@@ -281,7 +343,7 @@ class ServiceChecker:
             log_started_check_string = "Log started"
             last_log_started_index = -1
             for i in range(len(texts) - 1, -1, -1):
-                if log_started_check_string in texts[i]:
+                if log_started_check_string.lower() in texts[i].lower():
                     last_log_started_index = i
                     break
             
@@ -291,7 +353,7 @@ class ServiceChecker:
             ptz_instance_check_string = "CreateNewPTZIntance"
             found_ptz_after_log_start = False
             for i in range(last_log_started_index, len(texts)):
-                if ptz_instance_check_string in texts[i]:
+                if ptz_instance_check_string.lower() in texts[i].lower():
                     found_ptz_after_log_start = True
                     break
 
@@ -302,6 +364,42 @@ class ServiceChecker:
 
         except Exception as e:
             return CheckResult.ERROR, f"Error during specialized log check: {e}"
+    
+    def check_initial_db_ip(self) -> None:
+        """
+        Queries and logs the current IP address stored in the database for a key service.
+        """
+        service_to_check = next((s for s in self.config.services if s.database_updates), None)
+
+        if not service_to_check:
+            logger.info("No services configured for database updates. Skipping initial IP check.")
+            return
+
+        db_update_config = service_to_check.database_updates[0]
+        
+        try:
+            with engine.connect() as connection:
+                query = text(f"SELECT {db_update_config.set_column} FROM {self.config.database.schema}.{db_update_config.table} WHERE {db_update_config.where_condition}")
+                result = connection.execute(query).fetchone()
+                
+                if result:
+                    current_ip = result[0]
+                    logger.info(f"Initial database check: Found IP '{current_ip}' for target '{db_update_config.where_condition}'.")
+                else:
+                    logger.warning(f"Initial database check: Could not find a record for where condition: {db_update_config.where_condition}")
+
+        except Exception as e:
+            logger.error(f"Initial database check failed: {e}")
+
+    def update_database_for_all_services(self) -> None:
+        """
+        Iterates through all monitored services and updates the database settings.
+        This is intended to be called on a cluster failover event.
+        """
+        logger.info("Updating database settings for all monitored services following owner change.")
+        for service_config in self.config.services:
+            if service_config.database_updates:
+                self.update_database_settings(service_config)
     
     def update_database_settings(self, service_config: ServiceConfig) -> bool:
         """Update database settings for a service"""
