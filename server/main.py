@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 import threading
 from logging.handlers import RotatingFileHandler
-
+from api import app as api_app, set_service_controller
 from config.config_loader import load_config, Config
 from services.communication import MessageHandler
 from services.service_checker import ServiceChecker, CheckResult
@@ -238,6 +238,22 @@ class ServiceController:
         self.monitor_thread.start()
         
         self.logger.info("Service Controller started successfully")
+        
+        # Determines the correct port for this specific machine from the config
+        my_node_config = self.service_checker.get_my_node()
+        if not my_node_config:
+            self.logger.error("Could not determine API port for this node. API will not start.")
+        else:
+            api_port = my_node_config.port
+            # Gives the API module access to this controller's instance
+            set_service_controller(self) 
+            # Starts the Flask server in a non-blocking background thread
+            api_thread = threading.Thread(
+                target=lambda: api_app.run(host='0.0.0.0', port=api_port, debug=False, use_reloader=False),
+                daemon=True
+            )
+            api_thread.start()
+            self.logger.info(f"GUI API server started on port {api_port}")
         
         try:
             while self.is_running: time.sleep(1)

@@ -1,7 +1,7 @@
 import yaml
 import os
 from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger(__name__)
@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 class NodeConfig:
     name: str
     ip: str
+    port: int
 
 @dataclass
 class ClusterConfig:
@@ -45,6 +46,11 @@ class ServiceConfig:
     database_updates: List[DatabaseUpdate]
     log_directory: Optional[str] = None
     log_file_pattern: Optional[str] = None
+    
+@dataclass
+class ServiceGUIConfig:
+    name: str
+    instruction: str
 
 @dataclass
 class SettingsConfig:
@@ -72,6 +78,7 @@ class Config:
     cluster: ClusterConfig
     viewscape: ViewScapeConfig
     services: List[ServiceConfig]
+    services_GUI: List[ServiceGUIConfig] # Added this line
     settings: SettingsConfig
     logging: LoggingConfig
     database: DatabaseConfig
@@ -105,7 +112,7 @@ class ConfigLoader:
         
         cluster_data = config_data['cluster']
         nodes = [
-            NodeConfig(name=node['name'], ip=node['ip'])
+            NodeConfig(name=node['name'], ip=node['ip'], port=node['port'])
             for node in cluster_data['nodes']
         ]
         cluster = ClusterConfig(
@@ -120,6 +127,8 @@ class ConfigLoader:
             ports=viewscape_data['ports'],
             connection_timeout=viewscape_data['connection_timeout']
         )
+        
+        services_gui_data = [ServiceGUIConfig(**s) for s in config_data.get('services_GUI', [])]
         
         services = []
         for service_data in config_data['services']:
@@ -161,6 +170,7 @@ class ConfigLoader:
             cluster=cluster,
             viewscape=viewscape,
             services=services,
+            services_GUI=services_gui_data,
             settings=settings,
             logging=logging_config,
             database=database
@@ -241,8 +251,8 @@ class ConfigLoader:
                 'name': 'VERACITY-CLUSTER',
                 'role_name': 'VMC',
                 'nodes': [
-                    {'name': 'TVPS', 'ip': '10.***.*.173'},
-                    {'name': 'TVPS2', 'ip': '10.***.*.205'}
+                    {'name': 'TVPS', 'ip': '10.***.*.173', 'port': 5000},
+                    {'name': 'TVPS2', 'ip': '10.***.*.205', 'port': 5000}
                 ]
             },
             'viewscape': {
@@ -270,6 +280,9 @@ class ConfigLoader:
                         }
                     ]
                 }
+            ],
+            'services_GUI': [
+                {'name': 'Veracity_PTZ', 'instruction': 'Restart the service.'}
             ],
             'settings': {
                 'check_interval': 30,
