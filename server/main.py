@@ -14,8 +14,8 @@ from config.config_loader import Config, ConfigLoader
 # from services.service_checker import ServiceChecker, CheckResult
 # --- We still need ServiceChecker for the API ---
 from services.service_checker import ServiceChecker
-from db.database import test_connection
-from dotenv import load_dotenv
+# from db.database import test_connection
+# from dotenv import load_dotenv
 # Import the Flask app instance and the function to set the controller
 from api import app as api_app, set_service_controller
 
@@ -42,52 +42,83 @@ class ServiceController:
     def _setup_logging(self):
         """Configures the application logging based on the config file."""
         log_conf = self.config.logging
-        self.logger.setLevel(log_conf.level.upper())
-        self.logger.handlers.clear()
         
-        # File handler for logging to a file
+        # Use logging.getLogger() without a name to configure the root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(log_conf.level.upper())
+        root_logger.handlers.clear()
+        
+        # File handler
         file_handler = RotatingFileHandler(
             log_conf.file_path,
             maxBytes=log_conf.max_file_size,
             backupCount=log_conf.backup_count,
             encoding='utf-8'
         )
-        # Console handler for logging to the console
+        # Console handler
         console_handler = logging.StreamHandler(sys.stdout)
         
         formatter = logging.Formatter(log_conf.format)
         file_handler.setFormatter(formatter)
         console_handler.setFormatter(formatter)
         
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
+        root_logger.addHandler(file_handler)
+        root_logger.addHandler(console_handler)
+        
+        # Propagate logger settings to the class logger
+        self.logger = logging.getLogger(__name__)
         self.logger.info("Logging configured successfully.")
 
     def initialize(self) -> bool:
         """Loads configuration and initializes all components."""
         try:
-            load_dotenv()
+            # 1. load_dotenv() is REMOVED.
+            
+            # 2. This loads config, launches GUI, decrypts, and
+            #    parses everything (including 'env') into the dataclass
             self.config = self.config_loader.load_config()
+            
+            # 3. Setup logging
             self._setup_logging()
             
+            # 4. Validate
             if not self.config_loader.validate_config():
                 self.logger.error("Configuration validation failed. Exiting.")
                 return False
             
-            self.logger.info("Testing database connection...")
-            if not test_connection():
-                self.logger.error("Database connection test failed. Check credentials and network.")
-                # return False 
-                self.logger.warning("Continuing without database connection for API-only mode.")
+            # --- THIS IS THE NEW TEST FLOW ---
+            # 5. Import db module and initialize with decrypted config
+            try:
+                from db import database # Import the module
+                
+                # 5a. Call with the specific 'env' part of the config
+                if not database.init_db_engine(self.config.env):
+                    self.logger.error("Failed to initialize database engine. Check credentials in GUI.")
+                    return False
+                    
+                # 5b. Now, test the connection
+                self.logger.info("Testing database connection...")
+                if not database.test_connection():
+                    self.logger.error("Database connection test failed. Decrypted credentials may be wrong.")
+                    self.logger.warning("Continuing without database connection for API-only mode.")
+                else:
+                    self.logger.info("Database connection successful. Decrypted credentials are correct!")
+                    
+            except Exception as e:
+                self.logger.error(f"Database module failed to load or connect: {e}")
+                return False
+            # --- END OF TEST FLOW ---
 
-            # ServiceChecker is still needed for the API to get service statuses
+            # 6. Continue startup
             self.service_checker = ServiceChecker(self.config)
             self.logger.info("Service Controller initialized successfully.")
             return True
             
         except Exception as e:
-            self.logger.error(f"Failed to initialize Service Controller: {e}", exc_info=True)
+            print(f"Failed to initialize Service Controller: {e}", file=sys.stderr)
+            logging.error(f"Failed to initialize Service Controller: {e}", exc_info=True)
             return False
+    # -----------------------------------
 
     def _monitor_services(self):
         """The main monitoring loop (COMMENTED OUT)."""

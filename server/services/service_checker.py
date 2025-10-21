@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
 from datetime import datetime
 from sqlalchemy import text
-from config.config_loader import Config, ServiceConfig, LogCheck, get_config
+from config.config_loader import Config, ServiceConfig
 from db.database import get_db, engine
 
 logger = logging.getLogger(__name__)

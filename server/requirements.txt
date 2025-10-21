@@ -12,3 +12,5 @@ psutil>=5.9.0
 # Web server for GUI
 Flask>=2.0.0
 Flask-Cors>=3.0.0
+
+cryptography

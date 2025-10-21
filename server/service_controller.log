@@ -1,0 +1,43 @@
+2025-10-21 18:12:02,929 - __main__ - INFO - Logging configured successfully.
+2025-10-21 18:12:02,930 - config.config_loader - INFO - Configuration validation passed
+2025-10-21 18:12:02,930 - __main__ - INFO - Testing database connection...
+2025-10-21 18:12:02,931 - db.database - INFO - Successfully connected to the database!
+2025-10-21 18:12:02,931 - __main__ - INFO - Database connection successful.
+2025-10-21 18:12:02,932 - __main__ - INFO - Service Controller initialized successfully.
+2025-10-21 18:12:02,932 - __main__ - INFO - ============================================================
+2025-10-21 18:12:02,933 - __main__ - INFO - VERACITY SERVICE CONTROLLER STARTING in API-ONLY mode on APOORAV_MALIK
+2025-10-21 18:12:02,934 - __main__ - INFO - GUI API server started on port 5000
+2025-10-21 18:12:02,934 - __main__ - INFO - Failover monitoring thread is DISABLED.
+2025-10-21 18:12:02,937 - __main__ - INFO - Service Controller started successfully.
+2025-10-21 18:12:02,968 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.182:5000
+2025-10-21 18:12:02,969 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-21 18:36:04,093 - __main__ - INFO - Received signal 2, initiating graceful shutdown...
+2025-10-21 18:36:04,116 - __main__ - INFO - Service Controller stopped.
+2025-10-21 18:36:04,221 - __main__ - INFO - Received signal 2, initiating graceful shutdown...
+2025-10-21 18:36:04,406 - __main__ - INFO - Received signal 2, initiating graceful shutdown...
+2025-10-21 18:36:04,564 - __main__ - INFO - Received signal 2, initiating graceful shutdown...
+2025-10-21 18:38:35,572 - __main__ - INFO - Logging configured successfully.
+2025-10-21 18:38:35,572 - config.config_loader - INFO - Configuration validation passed
+2025-10-21 18:38:35,596 - db.database - INFO - Database engine initialized successfully.
+2025-10-21 18:38:35,596 - __main__ - INFO - Testing database connection...
+2025-10-21 18:38:36,291 - db.database - INFO - Successfully connected to the database!
+2025-10-21 18:38:36,291 - __main__ - INFO - Database connection successful. Decrypted credentials are correct!
+2025-10-21 18:38:36,291 - __main__ - INFO - Service Controller initialized successfully.
+2025-10-21 18:38:36,291 - __main__ - INFO - ============================================================
+2025-10-21 18:38:36,292 - __main__ - INFO - VERACITY SERVICE CONTROLLER STARTING in API-ONLY mode on APOORAV_MALIK
+2025-10-21 18:38:36,293 - __main__ - INFO - GUI API server started on port 5000
+2025-10-21 18:38:36,293 - __main__ - INFO - Failover monitoring thread is DISABLED.
+2025-10-21 18:38:36,293 - __main__ - INFO - Service Controller started successfully.
+2025-10-21 18:38:36,335 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.182:5000
+2025-10-21 18:38:36,335 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-10-21 18:40:35,726 - __main__ - INFO - Received signal 2, initiating graceful shutdown...
+2025-10-21 18:40:35,739 - __main__ - INFO - Service Controller stopped.
+2025-10-21 18:40:35,884 - __main__ - INFO - Received signal 2, initiating graceful shutdown...
+2025-10-21 18:40:36,043 - __main__ - INFO - Received signal 2, initiating graceful shutdown...
+2025-10-21 18:40:36,247 - __main__ - INFO - Received signal 2, initiating graceful shutdown...
